@@ -1,0 +1,127 @@
+# docker-compose.yml - 手机群控系统Docker编排
+version: '3.8'
+
+services:
+  # 主服务
+  phone-control:
+    build: .
+    container_name: phone-control-server
+    ports:
+      - "3001:3001"
+      - "5037:5037"  # ADB端口
+    volumes:
+      - ./downloads:/app/downloads
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+      - ./config:/app/config
+      - /dev/bus/usb:/dev/bus/usb  # USB设备访问
+    devices:
+      - /dev/bus/usb  # USB设备访问权限
+    privileged: true  # 需要特权模式访问USB
+    environment:
+      - NODE_ENV=production
+      - SERVER_PORT=3001
+      - ADB_SERVER_SOCKET=tcp:5037
+    networks:
+      - phone-control-network
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - postgres
+
+  # Redis缓存服务
+  redis:
+    image: redis:7-alpine
+    container_name: phone-control-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - phone-control-network
+    restart: unless-stopped
+
+  # PostgreSQL数据库(可选)
+  postgres:
+    image: postgres:15-alpine
+    container_name: phone-control-db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    environment:
+      POSTGRES_DB: phone_control
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: your_password_here
+    networks:
+      - phone-control-network
+    restart: unless-stopped
+
+  # Nginx反向代理
+  nginx:
+    image: nginx:alpine
+    container_name: phone-control-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./ssl:/etc/nginx/ssl
+      - ./frontend/dist:/usr/share/nginx/html
+    depends_on:
+      - phone-control
+    networks:
+      - phone-control-network
+    restart: unless-stopped
+
+  # 监控服务 - Prometheus
+  prometheus:
+    image: prom/prometheus
+    container_name: phone-control-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+    networks:
+      - phone-control-network
+    restart: unless-stopped
+
+  # 监控面板 - Grafana
+  grafana:
+    image: grafana/grafana
+    container_name: phone-control-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    networks:
+      - phone-control-network
+    restart: unless-stopped
+
+networks:
+  phone-control-network:
+    driver: bridge
+
+volumes:
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+# 开发环境覆盖配置
+# 使用: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
